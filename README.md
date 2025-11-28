@@ -608,6 +608,45 @@ YK.Modal.Events.afterClose = function(link) {
 </div>
 ```
 
+### Step 5: Enhance Modal Behavior (Advanced)
+
+Use lifecycle hooks and configuration flags to provide richer modal experiences such as focus trapping, scroll locking, stacked dialogs, and async content hydration.
+
+```javascript
+// Open a wizard modal with accessibility and animation helpers
+document.getElementById('launchWizard').addEventListener('click', function() {
+    YK.Modal.openModal('wizard-modal', {
+        trapFocus: true,       // Keep keyboard focus inside the modal
+        lockScroll: true,      // Prevent background scrolling while open
+        animation: 'slide-up'  // Apply a custom transition class
+    });
+});
+
+// Load content the first time the modal opens, then cache it
+let wizardLoaded = false;
+YK.Modal.Events.beforeOpen = function(link) {
+    if (link === 'wizard-modal' && !wizardLoaded) {
+        YK.Web.Ajax.getAsJson('/api/wizard/steps', {}, function(steps) {
+            const list = document.querySelector('#wizardSteps');
+            list.innerHTML = steps.map(step => `<li>${step.title}</li>`).join('');
+            wizardLoaded = true;
+        });
+    }
+};
+
+// Allow stacking by opening a confirmation modal from inside the wizard
+document.getElementById('wizardFinish').addEventListener('click', function() {
+    YK.Modal.openModal('confirm-finish', { trapFocus: true });
+});
+
+// Close all open modals with ESC while keeping the top-most state consistent
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+        YK.Modal.closeTop();
+    }
+});
+```
+
 ## Scroll System Implementation
 
 ### Step 1: Create Smooth Scroll Navigation
