@@ -1,26 +1,150 @@
 var YK = {}
+
+// Utility helpers for internal performance tweaks
+YK.Utils = {
+    /**
+     * Lightweight JSON normalization to ensure handlers always receive objects.
+     * Accepts plain objects or JSON strings.
+     * @param {object|string} payload
+     * @returns {object|string}
+     */
+    normalizeJson(payload) {
+        if (typeof payload !== 'string') {
+            return payload;
+        }
+
+        try {
+            return JSON.parse(payload);
+        } catch (e) {
+            return payload;
+        }
+    },
+
+    /**
+     * Simple throttle implementation to reduce high-frequency handler calls.
+     * @param {function} fn
+     * @param {number} wait
+     * @returns {function}
+     */
+    throttle(fn, wait) {
+        let inFlight = false;
+        return function (...args) {
+            if (inFlight) return;
+            inFlight = true;
+            fn.apply(this, args);
+            setTimeout(() => {
+                inFlight = false;
+            }, wait);
+        };
+    }
+};
 /*#####################################################################################################################*/
 // Form Validation Module - Load yannick/validation.js for form validation utilities
 YK.Validation = window.YannickValidator || null;
 /*#####################################################################################################################*/
 YK.Web = {
     Ajax: {
-        PostAsJson: function (url, data = {}, onSuccess = function (response, original) {
-        }, onError = function (jqXHR, textStatus, errorThrown) {
+        _cache: new Map(),
+
+        _buildCacheKey(url, method, data) {
+            return `${method}:${url}:${JSON.stringify(data || {})}`;
+        },
+
+        _resolveCache(key, cacheMs) {
+            if (!cacheMs || cacheMs <= 0) return null;
+            const cached = this._cache.get(key);
+            if (!cached) return null;
+
+            const isFresh = Date.now() - cached.timestamp < cacheMs;
+            return isFresh ? cached.payload : null;
+        },
+
+        _storeCache(key, payload) {
+            this._cache.set(key, {payload, timestamp: Date.now()});
+        },
+
+        /**
+         * Generic JSON helper with optional response caching and abort support.
+         * @param {Object} opts
+         * @param {string} opts.url
+         * @param {'get'|'post'|'put'|'delete'} [opts.method]
+         * @param {Object} [opts.data]
+         * @param {Function} [opts.onSuccess]
+         * @param {Function} [opts.onError]
+         * @param {number} [opts.cacheMs] Cache duration in milliseconds
+         * @param {Object} [opts.headers]
+         * @returns {jqXHR|PromiseLike<any>} jqXHR instance for network calls or a resolved promise for cache hits
+         */
+        requestJson: function ({
+            url,
+            method = 'post',
+            data = {},
+            onSuccess = function () {},
+            onError = function () {},
+            cacheMs = 0,
+            headers = {}
         }) {
-            $.ajax({
+            const normalizedMethod = method.toLowerCase();
+            const cacheKey = this._buildCacheKey(url, normalizedMethod, data);
+            const cached = this._resolveCache(cacheKey, cacheMs);
+
+            if (cached !== null) {
+                const response = YK.Utils.normalizeJson(cached);
+                onSuccess(response, cached);
+                return $.Deferred().resolve(response, cached).promise();
+            }
+
+            const ajaxOptions = {
                 url: url,
-                type: "post",
-                data: data,
-                dataType: "json",
-                success: function (response) {
-                    const r = JSON.parse(response);
-                    onSuccess(r, response);
+                type: normalizedMethod,
+                data: JSON.stringify(data || {}),
+                dataType: 'json',
+                contentType: 'application/json; charset=utf-8',
+                headers: headers,
+                success: (response) => {
+                    const normalized = YK.Utils.normalizeJson(response);
+                    if (cacheMs > 0) this._storeCache(cacheKey, normalized);
+                    onSuccess(normalized, response);
                 },
                 error: function (jqXHR, textStatus, errorThrown) {
-                    onError(textStatus, errorThrown);
+                    onError(textStatus, errorThrown, jqXHR);
                 }
+            };
+
+            return $.ajax(ajaxOptions);
+        },
+
+        /**
+         * Legacy alias with improved parsing and optional caching.
+         * @param {string} url
+         * @param {Object} data
+         * @param {Function} onSuccess
+         * @param {Function} onError
+         * @param {Object} options Additional options ({cacheMs, headers})
+         */
+        PostAsJson: function (url, data = {}, onSuccess = function (response, original) {
+        }, onError = function (jqXHR, textStatus, errorThrown) {
+        }, options = {}) {
+            return this.requestJson({
+                url,
+                data,
+                onSuccess,
+                onError,
+                cacheMs: options.cacheMs,
+                headers: options.headers
             });
+        },
+
+        /**
+         * Clear a cached response or reset the entire cache.
+         * @param {string} [key]
+         */
+        clearCache: function (key) {
+            if (typeof key === 'string') {
+                this._cache.delete(key);
+            } else {
+                this._cache.clear();
+            }
         }
     }
 }
@@ -158,29 +282,7 @@ $(document).on('click', '[yk-type=tab][yk-option=menu]', function () {
     if (m.attr('yk-state') === "visible")
         return;
 
-    const link = m.attr('yk-link');
-    const group = m.attr('yk-group');
-    const mm = $('[yk-type=tab][yk-option=menu][yk-state=visible][yk-group=' + group + ']');
-    mm.removeAttr('yk-state');
-
-    m.attr('yk-state', 'visible');
-
-    const c = $('[yk-type=tab][yk-option=content][yk-state=visible][yk-group=' + group + ']');
-    c.hide();
-    c.removeAttr('yk-state');
-    YK.Tab.BeforeChange(YK.Tab.Active.Last.Group, YK.Tab.Active.Last.Link);
-    YK.Tab.Active.Groups[group].Active = false;
-    YK.Tab.Active.Groups[group].Link = null;
-
-    const nc = $('[yk-type=tab][yk-option=content][yk-link=' + link + '][yk-group=' + group + ']');
-    nc.attr('yk-state', 'visible');
-    YK.Tab.Active.Last.Link = nc.attr('yk-link');
-    YK.Tab.Active.Last.Group = nc.attr('yk-group');
-    $('[yk-type="tab"][yk-option="info"][yk-group=' + YK.Tab.Active.Last.Group + ']').attr('yk-state', YK.Tab.Active.Last.Link)
-    YK.Tab.Active.Groups[YK.Tab.Active.Last.Group].Active = true;
-    YK.Tab.Active.Groups[YK.Tab.Active.Last.Group].Link = YK.Tab.Active.Last.Link;
-    YK.Tab.AfterChange(YK.Tab.Active.Last.Group, YK.Tab.Active.Last.Link);
-    nc.show();
+    YK.Tab.ChangeToActive(m.attr('yk-link'), m.attr('yk-group'));
 });
 
 YK.Tab.UpdateTabs();
@@ -213,23 +315,22 @@ $(document).on('click', '[yk-type=menu][yk-option=menu]', function () {
         c.show();
     }
 });
-$('body').on('click', '*', function () {
-    if (YK.Menu.Active.Link !== null) {
-        const t = $(this);
 
+// Use a single delegated listener instead of binding to every element
+$(document).on('click', function (event) {
+    if (YK.Menu.Active.Link === null) return;
 
-        if (t.attr('yk-link') === YK.Menu.Active.Link) {
-        } else {
-            const activeM = $('[yk-type=menu][yk-option=menu][yk-link=' + YK.Menu.Active.Link + ']');
-            const activeC = $('[yk-type=menu][yk-option=content][yk-link=' + YK.Menu.Active.Link + ']');
-            if (!activeM.is(':focus') && !activeC.is(':focus')) {
-                activeM.removeAttr('yk-state');
-                activeC.removeAttr('yk-state');
-                activeC.hide();
-                YK.Menu.Active.Link = null;
-                YK.Menu.Active.Group = null;
-            }
-        }
+    const target = $(event.target);
+    if (target.attr('yk-link') === YK.Menu.Active.Link) return;
+
+    const activeM = $('[yk-type=menu][yk-option=menu][yk-link=' + YK.Menu.Active.Link + ']');
+    const activeC = $('[yk-type=menu][yk-option=content][yk-link=' + YK.Menu.Active.Link + ']');
+    if (!activeM.is(':focus') && !activeC.is(':focus')) {
+        activeM.removeAttr('yk-state');
+        activeC.removeAttr('yk-state');
+        activeC.hide();
+        YK.Menu.Active.Link = null;
+        YK.Menu.Active.Group = null;
     }
 });
 
@@ -262,21 +363,50 @@ $(document).on('click', '[yk-type=onClick][yk-option=redirect]', function () {
 });
 /*#####################################################################################################################*/
 $('[yk-type=modal][yk-option=content]').hide();
-$(document).on('click', '[yk-type=modal][yk-option=onClick]', function () {
-    const b = $(this).attr('yk-before');
-    const bT = $(this).attr('yk-before-type');
-    if (bT === "js") {
-        new Function(b)();
+YK.Modal = {
+    open(link, beforeScript, beforeType) {
+        if (beforeScript && beforeType === 'js') {
+            new Function(beforeScript)();
+        }
+        const panel = $('[yk-type=modal][yk-option=content][yk-link=\'' + link + '\']');
+        panel.attr('yk-state', 'visible');
+        panel.show();
+    },
+    close(link) {
+        const panel = $('[yk-type=modal][yk-option=content][yk-link=\'' + link + '\']');
+        panel.removeAttr('yk-state');
+        panel.hide();
+    },
+    closeAll() {
+        $('[yk-type=modal][yk-option=content][yk-state=visible]').each(function (_, v) {
+            const panel = $(v);
+            panel.removeAttr('yk-state');
+            panel.hide();
+        });
     }
-    const p = $('[yk-type=modal][yk-option=content][yk-link=\'' + $(this).attr('yk-link') + '\']');
-    p.attr('yk-state', "visible");
-    p.show();
+};
+
+$(document).on('click', '[yk-type=modal][yk-option=onClick]', function () {
+    YK.Modal.open($(this).attr('yk-link'), $(this).attr('yk-before'), $(this).attr('yk-before-type'));
 });
 
 $(document).on('click', '[yk-type=modal][yk-option=exit]', function () {
-    const p = $('[yk-type=modal][yk-option=content][yk-link=\'' + $(this).attr('yk-link') + '\']');
-    p.removeAttr('yk-state');
-    p.hide();
+    YK.Modal.close($(this).attr('yk-link'));
+});
+
+$(document).on('keydown', function (event) {
+    if (event.key === 'Escape') {
+        if (YK.Menu.Active.Link !== null) {
+            const activeM = $('[yk-type=menu][yk-option=menu][yk-link=' + YK.Menu.Active.Link + ']');
+            const activeC = $('[yk-type=menu][yk-option=content][yk-link=' + YK.Menu.Active.Link + ']');
+            activeM.removeAttr('yk-state');
+            activeC.removeAttr('yk-state');
+            activeC.hide();
+            YK.Menu.Active.Link = null;
+            YK.Menu.Active.Group = null;
+        }
+        YK.Modal.closeAll();
+    }
 });
 /*#####################################################################################################################*/
 $(document).on('click', '[yk-type=onClick][yk-option=scroll]', function () {

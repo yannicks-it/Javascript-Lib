@@ -180,6 +180,34 @@ YK.Web.Ajax.postAsJson(
 </div>
 ```
 
+### Step 4: Performance-Focused AJAX Helpers
+
+Use the enhanced `requestJson` helper to add response caching, custom headers, and abortable requests without rewriting existing code:
+
+```javascript
+// Fetch data with a 5s cache window and a custom trace header
+const request = YK.Web.Ajax.requestJson({
+    url: '/api/profile',
+    method: 'get',
+    cacheMs: 5000,
+    headers: { 'X-Trace': 'dashboard' },
+    onSuccess: function (data) {
+        renderProfile(data);
+    },
+    onError: function (status) {
+        console.warn('Request failed', status);
+    }
+});
+
+// Optionally abort long-running calls
+// request.abort();
+
+// Clear cached responses when underlying data changes
+YK.Web.Ajax.clearCache();
+```
+
+You can also continue to call `YK.Web.Ajax.PostAsJson()`; it now delegates to `requestJson` so you inherit the caching and header options while keeping legacy code intact.
+
 ## Tab System Implementation
 
 ### Step 1: Create HTML Structure
@@ -1017,6 +1045,26 @@ document.getElementById('infoBtn').addEventListener('click', function() {
 </div>
 ```
 
+### Step 3: Keyboard and Programmatic Control
+
+Modals now expose a small API for scripted flows and keyboard accessibility:
+
+```javascript
+// Open or close a modal programmatically
+YK.Modal.open('simple-modal');
+YK.Modal.close('simple-modal');
+
+// Close any open modal and dismiss active menus when the user presses Escape (built-in)
+// The library wires this up automatically, but you can trigger it manually:
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') {
+        YK.Modal.closeAll();
+    }
+});
+```
+
+This behavior also improves UX on touch devices by letting you clear overlays without reaching for the close button.
+
 ## Common Patterns & Examples
 
 ### Complete Dashboard Layout
@@ -1358,6 +1406,8 @@ YK.Web.Ajax.PostAsJson(); // Will call YK.Web.Ajax.postAsJson() internally
    - **Problem**: Sluggish performance, especially with many components
    - **Solution**:
      - Reduce animation duration: `YK.Config.animationDuration = 150;`
+     - Wrap frequent handlers with `YK.Utils.throttle(fn, wait)` to avoid excessive DOM reads
+     - Cache predictable API calls with `YK.Web.Ajax.requestJson({ cacheMs: 2000, ... })` to cut down on duplicate network traffic
      - Disable transitions if not needed: `YK.Config.defaultTransition = 'none';`
      - Use event delegation instead of direct event binding for dynamic elements
 
